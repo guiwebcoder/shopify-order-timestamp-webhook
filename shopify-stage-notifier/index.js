@@ -1,0 +1,5 @@
+SHOPIFY_STORE_URL=https://crazyneon.com
+SHOPIFY_ADMIN_API_ACCESS_TOKEN=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
+SLACK_WEBHOOK_URL=your-slack-webhook
+SENDGRID_API_KEY=2532cc778ebeff46cd2ded94f50856e4
+EMAIL_TO=rameshwar.sah@propoundinternet.com

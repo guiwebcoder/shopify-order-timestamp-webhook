@@ -10,6 +10,7 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@sendgrid/mail": "^8.1.6",
     "axios": "^1.7.3",
     "body-parser": "^1.20.2",
     "crypto": "^1.0.1",
