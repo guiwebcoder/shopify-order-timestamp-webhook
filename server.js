@@ -21,85 +21,121 @@ const stages = [
   { key: 'shipped_out', name: 'Shipped Out' },
 ];
 
+// ----------------------
+// Helper Functions
+// ----------------------
+
 // Verify Shopify webhook
 function verifyShopifyWebhook(req, res, next) {
-  const hmac = req.headers['x-shopify-hmac-sha256'];
-  const body = JSON.stringify(req.body);
-  const digest = crypto
-    .createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
-    .update(body, 'utf8')
-    .digest('base64');
+  try {
+    const hmac = req.headers['x-shopify-hmac-sha256'];
+    const body = JSON.stringify(req.body);
+    const digest = crypto
+      .createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
+      .update(body, 'utf8')
+      .digest('base64');
 
-  if (digest !== hmac) {
-    return res.status(401).send('Unauthorized');
+    if (digest !== hmac) {
+      console.warn('⚠️ Shopify webhook verification failed.');
+      return res.status(401).send('Unauthorized');
+    }
+    next();
+  } catch (err) {
+    console.error('Error verifying webhook:', err);
+    res.status(500).send('Webhook verification error');
   }
-  next();
 }
 
 // Slack notification
 async function sendSlackNotification(orderId, stageName, timestamp) {
-  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
-  const message = {
-    text: `📦 Order #${orderId} has progressed to "${stageName}" stage at ${timestamp}`,
-  };
-
-  await fetch(webhookUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(message),
-  });
+  try {
+    if (!process.env.SLACK_WEBHOOK_URL) return;
+    const message = {
+      text: `📦 Order #${orderId} has progressed to "${stageName}" stage at ${timestamp}`,
+    };
+    await fetch(process.env.SLACK_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message),
+    });
+  } catch (err) {
+    console.error('Error sending Slack notification:', err);
+  }
 }
 
 // Email notification
 async function sendEmailNotification(orderId, stageName, timestamp) {
-  const msg = {
-    to: process.env.EMAIL_TO,
-    from: 'no-reply@yourshop.com',
-    subject: `Order #${orderId} - ${stageName} Timestamp Created`,
-    text: `Order #${orderId} has reached the "${stageName}" stage at ${timestamp}.`,
-  };
-  await sgMail.send(msg);
-}
-
-// Update stage timestamp if missing
-async function updateStage(orderId, stage) {
-  const order = await shopifyClient.get({ path: `orders/${orderId}/metafields` });
-  const metafield = order.body.metafields.find(mf => mf.namespace === 'custom' && mf.key === stage.key);
-
-  if (!metafield || !metafield.value) {
-    const timestamp = new Date().toLocaleString();
-
-    await shopifyClient.post({
-      path: `orders/${orderId}/metafields`,
-      data: {
-        metafield: {
-          namespace: 'custom',
-          key: stage.key,
-          value: timestamp,
-          type: 'single_line_text_field',
-        },
-      },
-      type: 'application/json',
-    });
-
-    await sendSlackNotification(orderId, stage.name, timestamp);
-    await sendEmailNotification(orderId, stage.name, timestamp);
-
-    console.log(`✅ Order #${orderId}: ${stage.name} timestamp created.`);
+  try {
+    if (!process.env.SENDGRID_API_KEY || !process.env.EMAIL_TO) return;
+    const msg = {
+      to: process.env.EMAIL_TO,
+      from: 'no-reply@yourshop.com',
+      subject: `Order #${orderId} - ${stageName} Timestamp Created`,
+      text: `Order #${orderId} has reached the "${stageName}" stage at ${timestamp}.`,
+    };
+    await sgMail.send(msg);
+  } catch (err) {
+    console.error('Error sending email notification:', err);
   }
 }
 
-// Handle Shopify order update webhook
+// Notify all new stages
+async function notifyNewStages(orderId) {
+  try {
+    const order = await shopifyClient.get({ path: `orders/${orderId}/metafields` });
+    const metafields = order.body.metafields;
+    const notifications = [];
+
+    for (const stage of stages) {
+      const mf = metafields.find(m => m.namespace === 'custom' && m.key === stage.key);
+      if (!mf || !mf.value) {
+        const timestamp = new Date().toLocaleString();
+        await shopifyClient.post({
+          path: `orders/${orderId}/metafields`,
+          data: {
+            metafield: {
+              namespace: 'custom',
+              key: stage.key,
+              value: timestamp,
+              type: 'single_line_text_field',
+            },
+          },
+          type: 'application/json',
+        });
+        notifications.push({ stageName: stage.name, timestamp });
+      }
+    }
+
+    // Send notifications for all new stages
+    for (const note of notifications) {
+      await sendSlackNotification(orderId, note.stageName, note.timestamp);
+      await sendEmailNotification(orderId, note.stageName, note.timestamp);
+      console.log(`✅ Order #${orderId}: ${note.stageName} timestamp created & notified.`);
+    }
+  } catch (err) {
+    console.error(`Error processing order #${orderId}:`, err);
+  }
+}
+
+// ----------------------
+// Webhook Route
+// ----------------------
 app.post('/webhook/order-updated', verifyShopifyWebhook, async (req, res) => {
-  const orderId = req.body.id;
-  for (const stage of stages) {
-    await updateStage(orderId, stage);
+  try {
+    const orderId = req.body.id;
+    if (!orderId) throw new Error('Missing order ID in webhook payload');
+    await notifyNewStages(orderId);
+    res.status(200).send('Webhook processed');
+  } catch (err) {
+    console.error('Error handling webhook:', err);
+    res.status(500).send('Error processing webhook');
   }
-  res.status(200).send('Webhook processed');
 });
 
-// Start server
+// ----------------------
+// Start Server
+// ----------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Shopify Stage Notifier listening on port ${PORT}`);
+  console.log(`✅ Shopify Stage Notifier running on port ${PORT}`);
 });
