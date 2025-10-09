@@ -5,6 +5,8 @@ import { shopifyClient } from './shopifyClient.js';
 import sgMail from '@sendgrid/mail';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import { logMessage } from './logger.js';
+
 dotenv.config();
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
