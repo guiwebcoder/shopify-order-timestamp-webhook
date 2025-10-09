@@ -5,30 +5,11 @@ import { shopifyClient } from './shopifyClient.js';
 import sgMail from '@sendgrid/mail';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-import fs from 'fs';
-import path from 'path';
+import { logMessage } from './logger.js';
+
 dotenv.config();
-
-// --------------------
-// Logger
-// --------------------
-const logsDir = path.join(process.cwd(), 'logs');
-if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir);
-
-function logMessage(message) {
-  const timestamp = new Date().toISOString();
-  const logLine = `[${timestamp}] ${message}\n`;
-  const logFile = path.join(logsDir, `${new Date().toISOString().slice(0, 10)}.log`);
-  fs.appendFile(logFile, logLine, err => {
-    if (err) console.error('Failed to write log:', err);
-  });
-  console.log(logLine.trim());
-}
-
-// --------------------
-// Setup
-// --------------------
 sgMail.setApiKey(process.env.SENDGRID_API_KEY || '');
+
 const app = express();
 app.use(bodyParser.json({ type: 'application/json' }));
 
@@ -41,16 +22,15 @@ const stages = [
   { key: 'shipped_out', name: 'Shipped Out' },
 ];
 
-// --------------------
-// Helper Functions
-// --------------------
 function verifyShopifyWebhook(req, res, next) {
   try {
     const hmac = req.headers['x-shopify-hmac-sha256'];
     const body = JSON.stringify(req.body);
-    const digest = crypto.createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET || '')
-                         .update(body, 'utf8')
-                         .digest('base64');
+    const digest = crypto
+      .createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET || '')
+      .update(body, 'utf8')
+      .digest('base64');
+
     if (digest !== hmac) {
       logMessage('⚠️ Shopify webhook verification failed.');
       return res.status(401).send('Unauthorized');
@@ -93,9 +73,6 @@ async function sendEmailNotification(orderId, stageName, timestamp) {
   }
 }
 
-// --------------------
-// Notify New Stages
-// --------------------
 async function notifyNewStages(orderId) {
   try {
     const order = await shopifyClient.get({ path: `orders/${orderId}/metafields` });
@@ -122,4 +99,31 @@ async function notifyNewStages(orderId) {
       }
     }
 
-    for (co
+    for (const note of notifications) {
+      await sendSlackNotification(orderId, note.stageName, note.timestamp);
+      await sendEmailNotification(orderId, note.stageName, note.timestamp);
+      logMessage(`✅ Order #${orderId}: ${note.stageName} timestamp created & notified.`);
+    }
+
+    if (notifications.length === 0) logMessage(`Order #${orderId}: No new stages to notify.`);
+  } catch (err) {
+    logMessage(`❌ Error processing order #${orderId}: ${err.message}`);
+  }
+}
+
+app.post('/webhook/order-updated', verifyShopifyWebhook, async (req, res) => {
+  try {
+    const orderId = req.body.id;
+    if (!orderId) throw new Error('Missing order ID in webhook payload');
+    await notifyNewStages(orderId);
+    res.status(200).send('Webhook processed');
+  } catch (err) {
+    logMessage(`❌ Error handling webhook: ${err.message}`);
+    res.status(500).send('Error processing webhook');
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  logMessage(`✅ Shopify Stage Notifier running on port ${PORT}`);
+});
