@@ -1,14 +1,30 @@
-import { Shopify } from '@shopify/shopify-api';
+import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 dotenv.config();
 
 const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL;
 const SHOPIFY_ADMIN_API_ACCESS_TOKEN = process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN;
 
-if (!SHOPIFY_STORE_URL) throw new Error('Missing SHOPIFY_STORE_URL environment variable!');
-if (!SHOPIFY_ADMIN_API_ACCESS_TOKEN) throw new Error('Missing SHOPIFY_ADMIN_API_ACCESS_TOKEN environment variable!');
+if (!SHOPIFY_STORE_URL) throw new Error('❌ Missing SHOPIFY_STORE_URL in .env');
+if (!SHOPIFY_ADMIN_API_ACCESS_TOKEN) throw new Error('❌ Missing SHOPIFY_ADMIN_API_ACCESS_TOKEN in .env');
 
-const storeDomain = SHOPIFY_STORE_URL.replace(/^https?:\/\//, '');
+export async function shopifyRequest(endpoint, method = 'GET', body = null) {
+  const url = `https://${SHOPIFY_STORE_URL}/admin/api/2024-07/${endpoint}`;
+  const headers = {
+    'X-Shopify-Access-Token': SHOPIFY_ADMIN_API_ACCESS_TOKEN,
+    'Content-Type': 'application/json',
+  };
 
-export const shopifyClient = new Shopify.Clients.Rest(storeDomain, SHOPIFY_ADMIN_API_ACCESS_TOKEN);
-console.log(`✅ Shopify client initialized for store: ${storeDomain}`);
+  const options = { method, headers };
+  if (body) options.body = JSON.stringify(body);
+
+  const response = await fetch(url, options);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`❌ Shopify API Error: ${response.status} ${response.statusText}\n${errorText}`);
+    throw new Error(`Shopify API request failed: ${response.status}`);
+  }
+
+  return response.json();
+}

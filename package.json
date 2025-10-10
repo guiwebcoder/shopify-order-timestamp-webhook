@@ -1,7 +1,7 @@
 {
   "name": "shopify-timestamp-webhook",
   "version": "1.0.0",
-  "description": "Shopify Order Stage Timestamp Webhook (No Notifications)",
+  "description": "Shopify Order Stage Timestamp Webhook (no notifications)",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
@@ -9,10 +9,10 @@
     "dev": "nodemon src/index.js"
   },
   "dependencies": {
-    "@shopify/shopify-api": "^3.0.1",
     "body-parser": "^1.20.2",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "node-fetch": "^3.4.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
