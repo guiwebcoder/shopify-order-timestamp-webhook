@@ -11,7 +11,7 @@ app.use(bodyParser.json());
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const ACCESS_TOKEN = process.env.ACCESS_TOKEN;
 
-// Define metafield pairs: main → timestamp
+// Map main metafields to their timestamp metafields
 const metafieldPairs = [
   { main: "sent_to_design_production", timestamp: "sent_to_design_production_timestamp" },
   { main: "pending_customer_approval", timestamp: "pending_customer_approval_timestamp" },
@@ -21,7 +21,7 @@ const metafieldPairs = [
   { main: "packed_ready_to_ship", timestamp: "packed_ready_to_ship_timestamp" },
 ];
 
-// Fetch a specific metafield for an order
+// Fetch a metafield value for an order
 async function getMetafield(orderId, namespace, key) {
   const url = `https://${SHOPIFY_STORE}/admin/api/2025-07/orders/${orderId}/metafields.json?namespace=${namespace}&key=${key}`;
   const res = await fetch(url, {
@@ -57,7 +57,7 @@ async function updateMetafield(orderId, namespace, key, value) {
 }
 
 // Webhook endpoint
-app.post("/order-updated", async (req, res) => {
+app.post("/webhook/order-updated", async (req, res) => {
   const order = req.body;
   const orderId = order.id;
 
@@ -66,10 +66,10 @@ app.post("/order-updated", async (req, res) => {
       const mainValueCurrent = order.metafields?.custom?.[pair.main];
       if (!mainValueCurrent) continue;
 
-      // Fetch the previous value from Shopify
+      // Fetch previous value
       const mainValuePrevious = await getMetafield(orderId, "custom", pair.main);
 
-      // Only update timestamp if value changed
+      // Update timestamp only if value changed
       if (mainValuePrevious !== mainValueCurrent) {
         const timestamp = new Date().toISOString();
         await updateMetafield(orderId, "custom", pair.timestamp, timestamp);
@@ -84,6 +84,8 @@ app.post("/order-updated", async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log(`Server running on port ${process.env.PORT || 3000}`);
+// Listen on Render-assigned port
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
