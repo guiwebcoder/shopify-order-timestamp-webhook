@@ -35,25 +35,34 @@ export async function shopifyRequest(endpoint, method = "GET", body = null) {
 }
 
 /**
- * Creates or updates a metafield automatically.
+ * Creates or updates an order metafield automatically
  */
 export async function upsertMetafield(ownerType, ownerId, namespace, key, value, type = "single_line_text_field") {
   try {
+    // Fetch existing metafield
     const existing = await shopifyRequest(
       `${ownerType}/${ownerId}/metafields.json?namespace=${namespace}&key=${key}`,
       "GET"
     );
-
     const metafield = existing.metafields?.[0];
 
     if (metafield) {
+      // ✅ Update existing metafield
       await shopifyRequest(`metafields/${metafield.id}.json`, "PUT", {
         metafield: { value },
       });
-      log(`Updated existing metafield: ${namespace}.${key}`, "success");
+      log(`Updated metafield: ${namespace}.${key}`, "success");
     } else {
-      await shopifyRequest(`${ownerType}/${ownerId}/metafields.json`, "POST", {
-        metafield: { namespace, key, type, value },
+      // ✅ Create new metafield correctly attached to order
+      await shopifyRequest(`metafields.json`, "POST", {
+        metafield: {
+          namespace,
+          key,
+          type,
+          value,
+          owner_resource: "order",
+          owner_id: ownerId,
+        },
       });
       log(`Created new metafield: ${namespace}.${key}`, "success");
     }
