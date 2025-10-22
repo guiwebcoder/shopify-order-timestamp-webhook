@@ -11,42 +11,71 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 3000;
 
-// Define your main → timestamp metafield mapping
+// Define the mapping of main metafield → timestamp metafield
 const stagePairs = [
-  { field: "sent_to_design_production", timestampField: "sent_to_design_production_timestamp" },
-  { field: "pending_customer_approval", timestampField: "pending_customer_approval_timestamp" },
-  { field: "production_initiated", timestampField: "production_initiated_timestamp" },
-  { field: "in_production", timestampField: "in_production_timestamp" },
-  { field: "cleaning_packaging", timestampField: "cleaning_packaging_timestamp" },
-  { field: "packed_ready_to_ship", timestampField: "packed_ready_to_ship_timestamp" }
+  { field: "sent_to_design_production", timestamp: "sent_to_design_production_timestamp" },
+  { field: "pending_customer_approval", timestamp: "pending_customer_approval_timestamp" },
+  { field: "production_initiated", timestamp: "production_initiated_timestamp" },
+  { field: "in_production", timestamp: "production_stage_timestamp" },
+  { field: "cleaning_packaging", timestamp: "quality_check_packaging_timestamp" },
+  { field: "packed_ready_to_ship", timestamp: "shipped_out_timestamp" },
 ];
 
-app.post("/update-order-timestamps", async (req, res) => {
+// Function to create a human-readable timestamp
+const formatTimestamp = () => {
+  const now = new Date();
+  const options = {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  };
+  return now.toLocaleString("en-US", options);
+};
+
+app.post("/webhook", async (req, res) => {
   try {
-    const { orderId, metafields } = req.body;
+    const body = req.body;
+    const orderId = body.id;
+
+    log(`📦 Webhook triggered for Order ID: ${orderId}`);
+
+    // Fetch all metafields for this order
+    const response = await shopifyRequest(`orders/${orderId}/metafields.json`, "GET");
+    const metafields = response.metafields || [];
 
     for (const pair of stagePairs) {
-      const currentValue = metafields[pair.field];
+      const main = metafields.find((m) => m.key === pair.field && m.namespace === "custom");
+      const timestamp = metafields.find((m) => m.key === pair.timestamp && m.namespace === "custom");
 
-      // Update timestamp every time the value changes to "Yes"
-      if (currentValue === "Yes") {
-        await shopifyRequest(`orders/${orderId}/metafields`, "POST", {
+      if (main && main.value && main.updated_at) {
+        const formatted = `${pair.field.replace(/_/g, " ")} at ${formatTimestamp()}`;
+
+        // Update or create timestamp metafield
+        await shopifyRequest(`orders/${orderId}/metafields.json`, "POST", {
           metafield: {
             namespace: "custom",
-            key: pair.timestampField,
-            value: new Date().toISOString(),
-            type: "single_line_text_field"
-          }
+            key: pair.timestamp,
+            type: "single_line_text_field",
+            value: formatted,
+          },
         });
-        log(`Updated ${pair.timestampField} for order ${orderId}`);
+
+        log(`✅ Updated ${pair.timestamp}: ${formatted}`);
       }
     }
 
-    res.status(200).send({ message: "Timestamps updated successfully" });
+    res.status(200).send("✅ Order timestamps updated successfully");
   } catch (error) {
-    console.error(error);
-    res.status(500).send({ error: "Failed to update timestamps" });
+    console.error("❌ Error updating timestamps:", error.message);
+    res.status(500).send("Error updating order timestamps");
   }
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.get("/", (req, res) => {
+  res.send("✅ Shopify Order Timestamp Webhook is running");
+});
+
+app.listen(PORT, () => log(`🚀 Server running on port ${PORT}`));
