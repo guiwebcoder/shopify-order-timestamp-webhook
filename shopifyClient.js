@@ -1,12 +1,15 @@
 import fetch from "node-fetch";
 import dotenv from "dotenv";
+import { log } from "./logger.js";
 
 dotenv.config();
 
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
 const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-// Main request wrapper
+/**
+ * Generic Shopify API request wrapper
+ */
 export async function shopifyRequest(endpoint, method = "GET", body = null) {
   const url = `https://${SHOPIFY_STORE}/admin/api/2025-07/${endpoint}`;
   const options = {
@@ -21,9 +24,11 @@ export async function shopifyRequest(endpoint, method = "GET", body = null) {
   const response = await fetch(url, options);
   const data = await response.json();
 
-  console.log(`[${method}] ${url} → ${response.status}`);
-  if (response.status >= 400) {
-    console.error("⚠️ Shopify API Error:", data);
+  log(`[${method}] ${url} → ${response.status}`, "info");
+
+  if (!response.ok) {
+    log(`Shopify API Error: ${JSON.stringify(data)}`, "error");
+    throw new Error(data.errors || "Shopify API request failed");
   }
 
   return data;
@@ -31,19 +36,9 @@ export async function shopifyRequest(endpoint, method = "GET", body = null) {
 
 /**
  * Creates or updates a metafield automatically.
- * - If metafield exists, performs PUT update
- * - If not, performs POST create
- *
- * @param {string} ownerType - "orders", "products", etc.
- * @param {string} ownerId - Shopify object ID
- * @param {string} namespace - e.g., "custom"
- * @param {string} key - metafield key
- * @param {string} value - metafield value
- * @param {string} type - Shopify metafield type (default: single_line_text_field)
  */
 export async function upsertMetafield(ownerType, ownerId, namespace, key, value, type = "single_line_text_field") {
   try {
-    // Check if metafield already exists
     const existing = await shopifyRequest(
       `${ownerType}/${ownerId}/metafields.json?namespace=${namespace}&key=${key}`,
       "GET"
@@ -52,19 +47,17 @@ export async function upsertMetafield(ownerType, ownerId, namespace, key, value,
     const metafield = existing.metafields?.[0];
 
     if (metafield) {
-      // ✅ Update existing metafield
       await shopifyRequest(`metafields/${metafield.id}.json`, "PUT", {
         metafield: { value },
       });
-      console.log(`🟢 Updated existing metafield: ${namespace}.${key}`);
+      log(`Updated existing metafield: ${namespace}.${key}`, "success");
     } else {
-      // ✅ Create new metafield
       await shopifyRequest(`${ownerType}/${ownerId}/metafields.json`, "POST", {
         metafield: { namespace, key, type, value },
       });
-      console.log(`🟢 Created new metafield: ${namespace}.${key}`);
+      log(`Created new metafield: ${namespace}.${key}`, "success");
     }
   } catch (error) {
-    console.error(`❌ Failed to upsert metafield ${namespace}.${key}:`, error.message);
+    log(`Failed to upsert metafield ${namespace}.${key}: ${error.message}`, "error");
   }
 }
