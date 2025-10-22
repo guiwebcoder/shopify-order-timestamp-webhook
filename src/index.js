@@ -1,7 +1,7 @@
 import express from "express";
 import bodyParser from "body-parser";
 import dotenv from "dotenv";
-import { shopifyRequest, upsertMetafield } from "./shopifyClient.js";
+import { shopifyRequest } from "./shopifyClient.js";
 import { log } from "./logger.js";
 
 dotenv.config();
@@ -11,21 +11,17 @@ app.use(bodyParser.json());
 
 const PORT = process.env.PORT || 3000;
 
-/**
- * Stage → Timestamp metafield mapping
- */
+// Define the mapping of main metafield → timestamp metafield
 const stagePairs = [
   { field: "sent_to_design_production", timestamp: "sent_to_design_production_timestamp" },
   { field: "pending_customer_approval", timestamp: "pending_customer_approval_timestamp" },
   { field: "production_initiated", timestamp: "production_initiated_timestamp" },
-  { field: "in_production", timestamp: "in_production_timestamp" },
-  { field: "cleaning_packaging", timestamp: "cleaning_packaging_timestamp" },
-  { field: "packed_ready_to_ship", timestamp: "packed_ready_to_ship_timestamp" },
+  { field: "in_production", timestamp: "production_stage_timestamp" },
+  { field: "cleaning_packaging", timestamp: "quality_check_packaging_timestamp" },
+  { field: "packed_ready_to_ship", timestamp: "shipped_out_timestamp" },
 ];
 
-/**
- * Helper: formatted timestamp
- */
+// Function to create a human-readable timestamp
 const formatTimestamp = () => {
   const now = new Date();
   const options = {
@@ -39,54 +35,47 @@ const formatTimestamp = () => {
   return now.toLocaleString("en-US", options);
 };
 
-/**
- * Webhook: Order updated
- */
-app.post("/webhook/orders/update", async (req, res) => {
+app.post("/webhook", async (req, res) => {
   try {
-    const order = req.body;
-    const orderId = order.id;
+    const body = req.body;
+    const orderId = body.id;
+
     log(`📦 Webhook triggered for Order ID: ${orderId}`);
 
-    // Fetch all order metafields
-    const metafieldsResponse = await shopifyRequest(`orders/${orderId}/metafields.json`);
-    const metafields = metafieldsResponse.metafields || [];
+    // Fetch all metafields for this order
+    const response = await shopifyRequest(`orders/${orderId}/metafields.json`, "GET");
+    const metafields = response.metafields || [];
 
     for (const pair of stagePairs) {
-      const main = metafields.find((m) => m.key === pair.field);
-      const timestamp = metafields.find((m) => m.key === pair.timestamp);
+      const main = metafields.find((m) => m.key === pair.field && m.namespace === "custom");
+      const timestamp = metafields.find((m) => m.key === pair.timestamp && m.namespace === "custom");
 
-      // 🧱 Create missing main metafield (default "No")
-      if (!main) {
-        await upsertMetafield("orders", orderId, "custom", pair.field, "No");
-        log(`Created missing main metafield: ${pair.field}`, "warn");
-      }
-
-      // Re-fetch after creating
-      const updated = await shopifyRequest(`orders/${orderId}/metafields.json`);
-      const currentMain = updated.metafields.find((m) => m.key === pair.field);
-      const currentTs = updated.metafields.find((m) => m.key === pair.timestamp);
-
-      // ⏱️ When value = "Yes", update timestamp
-      if (currentMain?.value === "Yes") {
+      if (main && main.value && main.updated_at) {
         const formatted = `${pair.field.replace(/_/g, " ")} at ${formatTimestamp()}`;
-        await upsertMetafield("orders", orderId, "custom", pair.timestamp, formatted);
-        log(`✅ Updated ${pair.timestamp}: ${formatted}`, "success");
+
+        // Update or create timestamp metafield
+        await shopifyRequest(`orders/${orderId}/metafields.json`, "POST", {
+          metafield: {
+            namespace: "custom",
+            key: pair.timestamp,
+            type: "single_line_text_field",
+            value: formatted,
+          },
+        });
+
+        log(`✅ Updated ${pair.timestamp}: ${formatted}`);
       }
     }
 
     res.status(200).send("✅ Order timestamps updated successfully");
   } catch (error) {
-    log(`Webhook error: ${error.message}`, "error");
-    res.status(500).send("❌ Internal Server Error");
+    console.error("❌ Error updating timestamps:", error.message);
+    res.status(500).send("Error updating order timestamps");
   }
 });
 
-/**
- * Health check
- */
 app.get("/", (req, res) => {
   res.send("✅ Shopify Order Timestamp Webhook is running");
 });
 
-app.listen(PORT, () => log(`🚀 Server running on port ${PORT}`, "success"));
+app.listen(PORT, () => log(`🚀 Server running on port ${PORT}`));
