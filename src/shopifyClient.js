@@ -1,30 +1,63 @@
-import fetch from 'node-fetch';
-import dotenv from 'dotenv';
+import fetch from "node-fetch";
+import dotenv from "dotenv";
+import { log } from "./logger.js";
+
 dotenv.config();
 
-const SHOPIFY_STORE_URL = process.env.SHOPIFY_STORE_URL;
-const SHOPIFY_ADMIN_API_ACCESS_TOKEN = process.env.SHOPIFY_ADMIN_API_ACCESS_TOKEN;
+const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
+const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-if (!SHOPIFY_STORE_URL) throw new Error('❌ Missing SHOPIFY_STORE_URL in .env');
-if (!SHOPIFY_ADMIN_API_ACCESS_TOKEN) throw new Error('❌ Missing SHOPIFY_ADMIN_API_ACCESS_TOKEN in .env');
-
-export async function shopifyRequest(endpoint, method = 'GET', body = null) {
-  const url = `https://${SHOPIFY_STORE_URL}/admin/api/2024-07/${endpoint}`;
-  const headers = {
-    'X-Shopify-Access-Token': SHOPIFY_ADMIN_API_ACCESS_TOKEN,
-    'Content-Type': 'application/json',
+/**
+ * Generic Shopify API request wrapper
+ */
+export async function shopifyRequest(endpoint, method = "GET", body = null) {
+  const url = `https://${SHOPIFY_STORE}/admin/api/2025-07/${endpoint}`;
+  const options = {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": ACCESS_TOKEN,
+    },
   };
-
-  const options = { method, headers };
   if (body) options.body = JSON.stringify(body);
 
   const response = await fetch(url, options);
+  const data = await response.json();
+
+  log(`[${method}] ${url} → ${response.status}`, "info");
 
   if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`❌ Shopify API Error: ${response.status} ${response.statusText}\n${errorText}`);
-    throw new Error(`Shopify API request failed: ${response.status}`);
+    log(`Shopify API Error: ${JSON.stringify(data)}`, "error");
+    throw new Error(data.errors || "Shopify API request failed");
   }
 
-  return response.json();
+  return data;
+}
+
+/**
+ * Creates or updates a metafield automatically.
+ */
+export async function upsertMetafield(ownerType, ownerId, namespace, key, value, type = "single_line_text_field") {
+  try {
+    const existing = await shopifyRequest(
+      `${ownerType}/${ownerId}/metafields.json?namespace=${namespace}&key=${key}`,
+      "GET"
+    );
+
+    const metafield = existing.metafields?.[0];
+
+    if (metafield) {
+      await shopifyRequest(`metafields/${metafield.id}.json`, "PUT", {
+        metafield: { value },
+      });
+      log(`Updated existing metafield: ${namespace}.${key}`, "success");
+    } else {
+      await shopifyRequest(`${ownerType}/${ownerId}/metafields.json`, "POST", {
+        metafield: { namespace, key, type, value },
+      });
+      log(`Created new metafield: ${namespace}.${key}`, "success");
+    }
+  } catch (error) {
+    log(`Failed to upsert metafield ${namespace}.${key}: ${error.message}`, "error");
+  }
 }

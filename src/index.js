@@ -1,70 +1,71 @@
-import fetch from "node-fetch";
+import express from "express";
+import bodyParser from "body-parser";
 import dotenv from "dotenv";
+import { shopifyRequest, upsertMetafield } from "./shopifyClient.js";
+import { log } from "./logger.js";
 
 dotenv.config();
 
-const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
-const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+const app = express();
+app.use(bodyParser.json());
 
-// Main request wrapper
-export async function shopifyRequest(endpoint, method = "GET", body = null) {
-  const url = `https://${SHOPIFY_STORE}/admin/api/2025-07/${endpoint}`;
-  const options = {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      "X-Shopify-Access-Token": ACCESS_TOKEN,
-    },
-  };
-  if (body) options.body = JSON.stringify(body);
-
-  const response = await fetch(url, options);
-  const data = await response.json();
-
-  console.log(`[${method}] ${url} → ${response.status}`);
-  if (response.status >= 400) {
-    console.error("⚠️ Shopify API Error:", data);
-  }
-
-  return data;
-}
+const PORT = process.env.PORT || 3000;
 
 /**
- * Creates or updates a metafield automatically.
- * - If metafield exists, performs PUT update
- * - If not, performs POST create
- *
- * @param {string} ownerType - "orders", "products", etc.
- * @param {string} ownerId - Shopify object ID
- * @param {string} namespace - e.g., "custom"
- * @param {string} key - metafield key
- * @param {string} value - metafield value
- * @param {string} type - Shopify metafield type (default: single_line_text_field)
+ * Mapping between stage metafields and their timestamp counterparts
  */
-export async function upsertMetafield(ownerType, ownerId, namespace, key, value, type = "single_line_text_field") {
+const stagePairs = [
+  { field: "sent_to_design_production", timestamp: "sent_to_design_production_timestamp" },
+  { field: "pending_customer_approval", timestamp: "pending_customer_approval_timestamp" },
+  { field: "production_initiated", timestamp: "production_initiated_timestamp" },
+  { field: "in_production", timestamp: "in_production_timestamp" },
+  { field: "cleaning_packaging", timestamp: "cleaning_packaging_timestamp" },
+  { field: "packed_ready_to_ship", timestamp: "packed_ready_to_ship_timestamp" },
+];
+
+/**
+ * Shopify webhook endpoint (e.g., order update)
+ */
+app.post("/webhook/orders/update", async (req, res) => {
   try {
-    // Check if metafield already exists
-    const existing = await shopifyRequest(
-      `${ownerType}/${ownerId}/metafields.json?namespace=${namespace}&key=${key}`,
-      "GET"
-    );
+    const order = req.body;
+    const orderId = order.id;
 
-    const metafield = existing.metafields?.[0];
+    log(`Webhook received for order #${orderId}`);
 
-    if (metafield) {
-      // ✅ Update existing metafield
-      await shopifyRequest(`metafields/${metafield.id}.json`, "PUT", {
-        metafield: { value },
-      });
-      console.log(`🟢 Updated existing metafield: ${namespace}.${key}`);
-    } else {
-      // ✅ Create new metafield
-      await shopifyRequest(`${ownerType}/${ownerId}/metafields.json`, "POST", {
-        metafield: { namespace, key, type, value },
-      });
-      console.log(`🟢 Created new metafield: ${namespace}.${key}`);
+    const metafieldsResponse = await shopifyRequest(`orders/${orderId}/metafields.json`);
+    const metafields = metafieldsResponse.metafields || [];
+
+    for (const pair of stagePairs) {
+      const main = metafields.find(m => m.key === pair.field);
+      const ts = metafields.find(m => m.key === pair.timestamp);
+
+      if (!main) continue;
+
+      // Create or update timestamp when field is "Yes"
+      if (main.value === "Yes") {
+        const now = new Date();
+        const formatted = now.toISOString();
+
+        // ✅ If timestamp missing OR value changed → update timestamp
+        if (!ts || ts.value !== formatted) {
+          await upsertMetafield("orders", orderId, "custom", pair.timestamp, formatted);
+        }
+      }
     }
+
+    res.status(200).send("Timestamps updated successfully");
   } catch (error) {
-    console.error(`❌ Failed to upsert metafield ${namespace}.${key}:`, error.message);
+    log(`Error processing webhook: ${error.message}`, "error");
+    res.status(500).send("Internal Server Error");
   }
-}
+});
+
+/**
+ * Health check
+ */
+app.get("/", (req, res) => {
+  res.send("✅ Shopify Metafield Timestamp Updater is running");
+});
+
+app.listen(PORT, () => log(`Server listening on port ${PORT}`, "success"));
